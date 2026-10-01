@@ -1,7 +1,7 @@
 # MoodChat: Real-time MERN chat with AI sentiment analysis
 
 A real-time chat app built with **MongoDB, Express, React (Vite) and Node.js**, using **Socket.io** for live messaging.
-Every message is run through a sentiment analyzer (`input text -> output label`) before it is saved and broadcast.
+Every message is classified for sentiment before it is saved and broadcast. The app also includes live typing indicators, secure JWT authentication, and a responsive interface.
 
 ## Features
 - Register / log in (JWT + bcrypt)
@@ -52,9 +52,9 @@ mern-sentiment-chat/
 │   ├── constants.js          # room list
 │   ├── config/db.js
 │   ├── middleware/auth.js    # JWT guard
-│   ├── models/{User,Message}.js
-│   ├── routes/{auth,messages}.js
-│   └── utils/sentiment.js    # <- the AI sentiment feature
+│   ├── models/{User,Message,ChatRoom,Friendship}.js
+│   ├── routes/{auth,messages,rooms,friends}.js
+│   └── utils/                 # sentiment analysis and conversation access
 └── client/
     ├── .env.example
     ├── index.html
@@ -95,16 +95,9 @@ npm run dev
 Open http://localhost:5173, create two accounts in two browser windows, and chat.
 Try: "I love this, it's awesome!" / "this is terrible, I hate it" / "see you at 5".
 
-## Push to GitHub
-```bash
-git init
-git add .
-git commit -m "Initial commit: MERN sentiment chat"
-git branch -M main
-git remote add origin https://github.com/<your-username>/mern-sentiment-chat.git
-git push -u origin main
-```
-`.env` is git-ignored, so your secrets stay local.
+## Source repository
+The source is hosted at [github.com/Chikki101/Chat-App](https://github.com/Chikki101/Chat-App).
+Keep `server/.env` and deployment secrets out of Git; `.env` files are git-ignored.
 
 ## Deploy (single service on Render)
 GitHub only stores the code (GitHub Pages cannot run a Node/Socket.io server), so deploy the app on a Node host.
@@ -125,5 +118,5 @@ In production Express serves the built React app, so the frontend and backend sh
 ## Ideas to extend
 - Warn before sending a strongly negative message
 - Per-user mood history chart
-- Private rooms / DMs, message reactions, emoji picker
+- Message reactions, emoji picker
 - Swap `analyze()` for a multilingual or LLM-based classifier
