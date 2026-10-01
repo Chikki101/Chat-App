@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: moodchat
+    runtime: node
+    plan: free
+    autoDeployTrigger: commit
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGO_URI
+        sync: false

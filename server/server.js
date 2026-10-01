@@ -16,7 +16,7 @@ import { initSocket } from './socket.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 5000;
-const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:5173';
+const CLIENT_URL = process.env.CLIENT_URL || process.env.RENDER_EXTERNAL_URL || 'http://localhost:5173';
 
 if (!process.env.JWT_SECRET || !process.env.MONGO_URI) {
   console.error('Missing MONGO_URI or JWT_SECRET. Copy server/.env.example to server/.env and fill it in.');

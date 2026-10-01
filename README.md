@@ -100,20 +100,21 @@ The source is hosted at [github.com/Chikki101/Chat-App](https://github.com/Chikk
 Keep `server/.env` and deployment secrets out of Git; `.env` files are git-ignored.
 
 ## Deploy (single service on Render)
-GitHub only stores the code (GitHub Pages cannot run a Node/Socket.io server), so deploy the app on a Node host.
-Render's free tier works:
+GitHub stores the source; it does not itself run the Node/Socket.IO server or MongoDB, and GitHub
+Pages cannot host this full-stack app. This repository includes a Render Blueprint at `render.yaml`
+for provisioning the web service and GitHub Actions CI for build and dependency-audit checks.
 
-1. Create a free **MongoDB Atlas** cluster, add a database user, allow network access (0.0.0.0/0 for a demo), copy the connection string.
-2. On Render: **New -> Web Service**, connect your GitHub repo.
-3. Build command: `npm install && npm run build`
-4. Start command: `npm start`
-5. Environment variables:
-   - `NODE_ENV` = `production`
-   - `MONGO_URI` = your Atlas connection string
-   - `JWT_SECRET` = a long random string
-   - `CLIENT_URL` = your Render URL, e.g. `https://mern-sentiment-chat.onrender.com`
+1. Create a MongoDB Atlas cluster and database user. Copy its connection URI; URL-encode special characters in the database user's password.
+2. In Atlas Network Access, allow your Render service to connect. Render's dynamic outbound IPs may require `0.0.0.0/0` for a demo; use tighter networking or static egress controls for production.
+3. In Render, choose **New → Blueprint**, connect `Chikki101/Chat-App`, and deploy the `render.yaml` Blueprint.
+4. When prompted, set the secret `MONGO_URI` to the Atlas connection URI. Render generates `JWT_SECRET`; `NODE_ENV` is set to `production`.
+5. Wait for the `/api/health` health check to pass, then open the Render service URL.
 
-In production Express serves the built React app, so the frontend and backend share one URL and no CORS setup is needed.
+In production Express serves the built React app and Socket.IO from the same origin. The server uses Render's `RENDER_EXTERNAL_URL` automatically for socket CORS.
+The model downloads from Hugging Face on first sentiment analysis; free/ephemeral filesystems can
+download it again after a restart. The Render free instance may have limited memory: confirm that
+the service remains healthy after the first model inference; use a larger instance if it runs out of
+memory. Never put the Atlas URI or JWT secret in GitHub source, issues, or chat.
 
 ## Ideas to extend
 - Warn before sending a strongly negative message
