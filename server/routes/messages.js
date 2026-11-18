@@ -13,12 +13,13 @@ import {
 } from '../utils/chatAccess.js';
 import { blockedUserIds } from '../utils/blocks.js';
 import { ROOMS } from '../constants.js';
+import { publicRoomHistoryQuery, unreadAfter } from '../utils/publicMessageRetention.js';
 
 const router = Router();
 
 async function historyFor(room, userId, res) {
   const limit = Math.min(parseInt(res.req.query.limit, 10) || 50, 100);
-  const messages = await Message.find({ room }).sort({ createdAt: -1, _id: -1 }).limit(limit).lean();
+  const messages = await Message.find(publicRoomHistoryQuery(room)).sort({ createdAt: -1, _id: -1 }).limit(limit).lean();
   const senderIds = messages.map((message) => message.sender).filter(Boolean);
   const hiddenIds = await blockedUserIds(userId, senderIds);
   res.json(messages.filter((message) => !hiddenIds.has(String(message.sender))).reverse());
@@ -98,7 +99,7 @@ router.get('/unread', protect, async (req, res) => {
         await Message.countDocuments({
           room,
           sender: { $ne: req.user._id, $nin: [...hiddenIds] },
-          createdAt: { $gt: readByRoom.get(room), $lte: asOf },
+          createdAt: { $gt: unreadAfter(room, readByRoom.get(room), asOf), $lte: asOf },
         }),
       ])
     );

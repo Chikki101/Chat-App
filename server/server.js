@@ -13,6 +13,7 @@ import friendRoutes from './routes/friends.js';
 import userRoutes from './routes/users.js';
 import protect from './middleware/auth.js';
 import { analyze } from './utils/sentiment.js';
+import { startPublicMessageCleanup } from './utils/publicMessageRetention.js';
 import { initSocket } from './socket.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -58,5 +59,6 @@ if (process.env.NODE_ENV === 'production') {
 app.locals.io = initSocket(server, CLIENT_URL);
 
 connectDB().then(() => {
+  startPublicMessageCleanup(app.locals.io);
   server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 });

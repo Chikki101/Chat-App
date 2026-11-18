@@ -6,6 +6,7 @@ Every message is classified for sentiment before it is saved and broadcast. The 
 ## Features
 - Register / log in (JWT + bcrypt)
 - Public real-time channels (`general`, `random`), online users, typing indicator
+- Messages in `general` and `random` are deleted after 24 hours
 - Private, user-specific support conversations with preset quick questions and automatic answers
 - **Sentiment analysis on every message**: label (positive / neutral / negative) + score, stored in MongoDB
 - **Live tone preview** while you type

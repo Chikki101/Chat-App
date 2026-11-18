@@ -18,6 +18,7 @@ const SUPPORT_QUESTIONS = [
   'How do I ban or unban a member?',
   'How do I message a friend?',
 ];
+const PUBLIC_MESSAGE_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 function readInviteToken(value) {
   try {
@@ -198,6 +199,19 @@ export default function Chat() {
       if (msg.room !== roomRef.current) return;
       setMessages((prev) => (prev.some((m) => m._id === msg._id) ? prev : [...prev, msg]));
     });
+    socket.on('messages:expired', ({ room: expiredRoom, before }) => {
+      const cutoff = new Date(before).getTime();
+      if (!Number.isFinite(cutoff)) return;
+      if (roomRef.current === expiredRoom) {
+        setMessages((prev) => prev.filter((message) => new Date(message.createdAt).getTime() > cutoff));
+      }
+      for (const [messageId, event] of pendingUnreadRef.current) {
+        if (event.room === expiredRoom && event.createdAt <= cutoff) {
+          pendingUnreadRef.current.delete(messageId);
+        }
+      }
+      refreshUnreadCounts().catch((e) => setError(e.message));
+    });
     socket.on('room:unread', ({ room: unreadRoom, messageId, createdAt, senderId }) => {
       if (!unreadRoom) return;
       if (unreadRoom === roomRef.current) {
@@ -307,6 +321,15 @@ export default function Chat() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    if (!ROOMS.some((item) => item.id === room)) return undefined;
+    const timer = setInterval(() => {
+      const cutoff = Date.now() - PUBLIC_MESSAGE_RETENTION_MS;
+      setMessages((prev) => prev.filter((message) => new Date(message.createdAt).getTime() > cutoff));
+    }, 60 * 1000);
+    return () => clearInterval(timer);
+  }, [room]);
 
   const sendMessage = (text) => {
     socketRef.current?.emit('message:send', { room, text }, (result) => {
