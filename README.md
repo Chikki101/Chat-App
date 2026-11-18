@@ -5,14 +5,15 @@ Every message is classified for sentiment before it is saved and broadcast. The 
 
 ## Features
 - Register / log in (JWT + bcrypt)
-- Real-time channels (`general`, `random`, `support`), online users, typing indicator
+- Public real-time channels (`general`, `random`), online users, typing indicator
+- Private, user-specific support conversations with preset quick questions and automatic answers
 - **Sentiment analysis on every message**: label (positive / neutral / negative) + score, stored in MongoDB
 - **Live tone preview** while you type
 - **Room mood meter** summarising the sentiment of the room
 - **Private invite-only rooms** with creator bans, unbans, and automatic moderation
 - Creator room management with persistent room details, configurable invitation-link expiry, and permanent room/message deletion
 - **Mutual friend requests** and real-time one-to-one messaging
-- Unread message badges for rooms and direct conversations
+- Unread message badges for rooms, private support replies, and direct conversations
 - Separate unfriend and block controls for friends
 - User profiles with optional email, phone, and bio visible only to the profile owner and accepted friends
 - Blocking that removes friendships and filters blocked users from shared-room messages, typing, presence, and member lists
@@ -29,9 +30,10 @@ model files are downloaded from Hugging Face when sentiment is first requested a
 The first analysis therefore takes longer and requires internet access. No AI API key or
 per-request model fee is required.
 
-The public support room also provides preset quick questions and automatic answers for room setup,
-invites, moderation, friend requests, direct messages, blocking, profile privacy, and sentiment rules.
-The answers are fixed guidance based on the app's current features.
+Each user's private support conversation provides preset quick questions and automatic answers for
+room setup, invites, moderation, friend requests, direct messages, blocking, profile privacy, and
+sentiment rules. Messages and replies are only accessible to that user; they are not posted to
+public rooms.
 
 1. `server/socket.js` -> inside `message:send` (analyze -> save -> broadcast)
 2. `server/server.js` -> `POST /api/analyze` (powers the live preview)

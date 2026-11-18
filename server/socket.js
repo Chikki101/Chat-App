@@ -5,7 +5,7 @@ import Message from './models/Message.js';
 import ChatRoom from './models/ChatRoom.js';
 import { analyze } from './utils/sentiment.js';
 import { ROOMS } from './constants.js';
-import { canAccessConversation, privateRoomId } from './utils/chatAccess.js';
+import { canAccessConversation, privateRoomId, supportRoomUserId } from './utils/chatAccess.js';
 import { ejectRoomUser } from './utils/ejectRoomUser.js';
 import { blockedUserIds, blockedUsersAmong } from './utils/blocks.js';
 import { answerSupportQuestion } from './utils/supportAnswers.js';
@@ -16,7 +16,12 @@ const SCORE_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
 const ROOM_WARNING = 'Your negative score is high, please keep the chat respectful.';
 
 function isConversationKey(key) {
-  return ROOMS.includes(key) || /^private:[a-f\d]{24}$/i.test(key) || /^dm:[a-f\d]{24}:[a-f\d]{24}$/i.test(key);
+  return (
+    ROOMS.includes(key) ||
+    /^private:[a-f\d]{24}$/i.test(key) ||
+    /^dm:[a-f\d]{24}:[a-f\d]{24}$/i.test(key) ||
+    Boolean(supportRoomUserId(key))
+  );
 }
 
 export function initSocket(httpServer, clientOrigin) {
@@ -117,6 +122,7 @@ export function initSocket(httpServer, clientOrigin) {
 
         const sentiment = await analyze(clean);
         const privateId = privateRoomId(room);
+        const supportUserId = supportRoomUserId(room);
         if (
           privateId &&
           !(await ChatRoom.exists({ _id: privateId, members: _id, deleting: { $ne: true } }))
@@ -163,7 +169,9 @@ export function initSocket(httpServer, clientOrigin) {
           ? (chatRoom?.members || []).map(String)
           : directMatch
             ? directMatch.slice(1)
-            : [...online.keys()];
+            : supportUserId
+              ? [supportUserId]
+              : [...online.keys()];
         const unreadHiddenIds = await blockedUserIds(uid, unreadRecipientIds);
         for (const recipientId of new Set(unreadRecipientIds)) {
           if (recipientId !== uid && !unreadHiddenIds.has(recipientId)) {
@@ -176,7 +184,7 @@ export function initSocket(httpServer, clientOrigin) {
           }
         }
 
-        if (room === 'support') {
+        if (supportUserId) {
           const supportMessage = await Message.create({
             room,
             senderName: 'MoodChat Support',
@@ -196,16 +204,12 @@ export function initSocket(httpServer, clientOrigin) {
             sentiment: supportMessage.sentiment,
             createdAt: supportMessage.createdAt,
           });
-          for (const recipientId of online.keys()) {
-            if (recipientId !== uid) {
-              io.to(`user:${recipientId}`).emit('room:unread', {
-                room,
-                messageId: String(supportMessage._id),
-                createdAt: supportMessage.createdAt,
-                senderId: null,
-              });
-            }
-          }
+          io.to(`user:${supportUserId}`).emit('room:unread', {
+            room,
+            messageId: String(supportMessage._id),
+            createdAt: supportMessage.createdAt,
+            senderId: null,
+          });
         }
 
         if (privateId && sentiment.negativePoints > 0) {

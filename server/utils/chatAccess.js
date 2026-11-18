@@ -5,6 +5,12 @@ import { ROOMS } from '../constants.js';
 import { usersBlocked } from './blocks.js';
 
 export const privateRoomKey = (id) => `private:${id}`;
+export const supportRoomKey = (id) => `support:${id}`;
+
+export function supportRoomUserId(key) {
+  const match = /^support:([a-f\d]{24})$/i.exec(key);
+  return match ? match[1] : null;
+}
 
 export function privateRoomId(key) {
   const match = /^private:([a-f\d]{24})$/i.exec(key);
@@ -17,6 +23,9 @@ export function directMessageKey(firstId, secondId) {
 
 export async function canAccessConversation(userId, roomKey) {
   if (ROOMS.includes(roomKey)) return true;
+
+  const supportUserId = supportRoomUserId(roomKey);
+  if (supportUserId) return supportUserId.toLowerCase() === String(userId).toLowerCase();
 
   const roomId = privateRoomId(roomKey);
   if (roomId) {

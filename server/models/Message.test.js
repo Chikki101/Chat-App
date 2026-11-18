@@ -4,7 +4,7 @@ import Message from './Message.js';
 
 test('system support messages validate without a user sender', async () => {
   const message = new Message({
-    room: 'support',
+    room: 'support:0123456789abcdef01234567',
     senderName: 'MoodChat Support',
     system: true,
     text: 'Here is how to create a room.',

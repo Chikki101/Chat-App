@@ -5,7 +5,12 @@ import ChatRoom from '../models/ChatRoom.js';
 import ConversationRead from '../models/ConversationRead.js';
 import Friendship from '../models/Friendship.js';
 import protect from '../middleware/auth.js';
-import { canAccessConversation, directMessageKey, privateRoomKey } from '../utils/chatAccess.js';
+import {
+  canAccessConversation,
+  directMessageKey,
+  privateRoomKey,
+  supportRoomKey,
+} from '../utils/chatAccess.js';
 import { blockedUserIds } from '../utils/blocks.js';
 import { ROOMS } from '../constants.js';
 
@@ -50,6 +55,7 @@ router.get('/unread', protect, async (req, res) => {
     const blockedIds = await blockedUserIds(req.user._id, friendIds);
     const rooms = [
       ...ROOMS,
+      supportRoomKey(req.user._id),
       ...privateRooms.map((privateRoom) => privateRoomKey(privateRoom._id)),
       ...friendIds
         .filter((friendId) => !blockedIds.has(String(friendId)))

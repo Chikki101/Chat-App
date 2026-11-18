@@ -52,6 +52,7 @@ export default function Chat() {
   const [banTargetId, setBanTargetId] = useState('');
   const [inviteCopied, setInviteCopied] = useState(false);
   const inviteInputRef = useRef(null);
+  const supportKey = `support:${user.id}`;
 
   const socketRef = useRef(null);
   const roomRef = useRef(room);
@@ -108,9 +109,17 @@ export default function Chat() {
   const currentRoom = useMemo(() => {
     const chatRoom = rooms.find((item) => item.id === room);
     if (chatRoom) return chatRoom;
+    if (room === supportKey) {
+      return {
+        id: supportKey,
+        name: 'Support',
+        kind: 'support',
+        desc: 'Private help conversation. Only you can see it.',
+      };
+    }
     const friend = friends.friends.find((item) => dmKey(user.id, item.id) === room);
     return friend ? { ...friend, id: room, kind: 'direct', desc: 'Private conversation' } : null;
-  }, [friends.friends, room, rooms, user.id]);
+  }, [friends.friends, room, rooms, supportKey, user.id]);
   currentRoomRef.current = currentRoom;
 
   const selectConversation = (conversationId) => {
@@ -517,6 +526,24 @@ export default function Chat() {
           ))}
         </ul>
 
+        <h4>Help</h4>
+        <ul className="rooms">
+          <li>
+            <button
+              className={room === supportKey ? 'active' : ''}
+              onClick={() => selectConversation(supportKey)}
+              aria-label="Open private support"
+            >
+              Private support
+              {unreadCounts[supportKey] > 0 && (
+                <span className="unread-badge" aria-label={`${unreadCounts[supportKey]} unread support replies`}>
+                  {unreadCounts[supportKey] > 99 ? '99+' : unreadCounts[supportKey]}
+                </span>
+              )}
+            </button>
+          </li>
+        </ul>
+
         <div className="sidebar-section">
           <h4>Private rooms</h4>
           <label className="invite-expiry-choice">
@@ -747,7 +774,13 @@ export default function Chat() {
       <main className="chat">
         <header className="chat-header">
           <div>
-            <h2>{currentRoom?.kind === 'direct' ? currentName : `# ${currentName}`}</h2>
+            <h2>
+              {currentRoom?.kind === 'direct'
+                ? currentName
+                : currentRoom?.kind === 'support'
+                  ? currentName
+                  : `# ${currentName}`}
+            </h2>
             <p>{currentRoom?.desc || (currentRoom?.kind === 'private' ? `${currentRoom.memberCount} members · invitation only` : '')}</p>
           </div>
           <span className={`status ${connected ? 'on' : 'off'}`}>{connected ? 'Connected' : 'Reconnecting…'}</span>
@@ -755,7 +788,7 @@ export default function Chat() {
 
         <MoodSummary messages={messages} />
 
-        {room === 'support' && (
+        {room === supportKey && (
           <div className="support-faq" aria-label="Frequently asked questions">
             <span>Quick answers</span>
             {SUPPORT_QUESTIONS.map((question) => (

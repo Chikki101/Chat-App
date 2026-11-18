@@ -1,2 +1,2 @@
-// Channels available in the app. Keep in sync with client/src/constants.js
-export const ROOMS = ['general', 'random', 'support'];
+// Public channels available in the app. Keep in sync with client/src/constants.js
+export const ROOMS = ['general', 'random'];
