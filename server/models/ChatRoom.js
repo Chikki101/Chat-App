@@ -10,13 +10,23 @@ const banSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const warningSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const roomSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true, minlength: 2, maxlength: 40 },
     creator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     inviteHash: { type: String, required: true, unique: true },
+    inviteExpiresAt: { type: Date, default: null },
     bans: { type: [banSchema], default: [] },
+    warnings: { type: [warningSchema], default: [] },
     deleting: { type: Boolean, default: false },
   },
   { timestamps: true }

@@ -3,10 +3,11 @@ import { ICONS } from './SentimentBadge.jsx';
 // Summarises the sentiment of the messages currently loaded in the room
 export default function MoodSummary({ messages }) {
   const counts = { positive: 0, neutral: 0, negative: 0 };
-  messages.forEach((m) => {
+  const userMessages = messages.filter((message) => !message.system);
+  userMessages.forEach((m) => {
     counts[m.sentiment?.label || 'neutral'] += 1;
   });
-  const total = messages.length;
+  const total = userMessages.length;
 
   let overall = 'neutral';
   if (total > 0) {

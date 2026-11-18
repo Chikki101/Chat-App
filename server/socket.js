@@ -8,9 +8,12 @@ import { ROOMS } from './constants.js';
 import { canAccessConversation, privateRoomId } from './utils/chatAccess.js';
 import { ejectRoomUser } from './utils/ejectRoomUser.js';
 import { blockedUserIds, blockedUsersAmong } from './utils/blocks.js';
+import { answerSupportQuestion } from './utils/supportAnswers.js';
 
 const AUTO_BAN_POINTS = 500;
+const WARNING_POINTS = 300;
 const SCORE_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
+const ROOM_WARNING = 'Your negative score is high, please keep the chat respectful.';
 
 function isConversationKey(key) {
   return ROOMS.includes(key) || /^private:[a-f\d]{24}$/i.test(key) || /^dm:[a-f\d]{24}:[a-f\d]{24}$/i.test(key);
@@ -152,15 +155,77 @@ export function initSocket(httpServer, clientOrigin) {
           if (!hiddenIds.has(roomSocket.data.userId)) roomSocket.emit('message:new', message);
         }
 
+        const chatRoom = privateId
+          ? await ChatRoom.findById(privateId).select('members bans warnings deleting')
+          : null;
+        const directMatch = /^dm:([a-f\d]{24}):([a-f\d]{24})$/i.exec(room);
+        const unreadRecipientIds = privateId
+          ? (chatRoom?.members || []).map(String)
+          : directMatch
+            ? directMatch.slice(1)
+            : [...online.keys()];
+        const unreadHiddenIds = await blockedUserIds(uid, unreadRecipientIds);
+        for (const recipientId of new Set(unreadRecipientIds)) {
+          if (recipientId !== uid && !unreadHiddenIds.has(recipientId)) {
+            io.to(`user:${recipientId}`).emit('room:unread', {
+              room,
+              messageId: String(msg._id),
+              createdAt: msg.createdAt,
+              senderId: uid,
+            });
+          }
+        }
+
+        if (room === 'support') {
+          const supportMessage = await Message.create({
+            room,
+            senderName: 'MoodChat Support',
+            senderColor: '#7c3aed',
+            system: true,
+            text: answerSupportQuestion(clean),
+            sentiment: { label: 'neutral', score: 0, comparative: 0, confidence: 1, negativePoints: 0 },
+          });
+          io.to(room).emit('message:new', {
+            _id: String(supportMessage._id),
+            room,
+            sender: null,
+            senderName: supportMessage.senderName,
+            senderColor: supportMessage.senderColor,
+            system: true,
+            text: supportMessage.text,
+            sentiment: supportMessage.sentiment,
+            createdAt: supportMessage.createdAt,
+          });
+          for (const recipientId of online.keys()) {
+            if (recipientId !== uid) {
+              io.to(`user:${recipientId}`).emit('room:unread', {
+                room,
+                messageId: String(supportMessage._id),
+                createdAt: supportMessage.createdAt,
+                senderId: null,
+              });
+            }
+          }
+        }
+
         if (privateId && sentiment.negativePoints > 0) {
-          const chatRoom = await ChatRoom.findById(privateId).select('creator members bans');
-          if (chatRoom) {
+          if (chatRoom && !chatRoom.deleting) {
             const windowStart = new Date(Date.now() - SCORE_WINDOW_MS);
             const [score] = await Message.aggregate([
               { $match: { room, sender: _id, createdAt: { $gte: windowStart } } },
               { $group: { _id: null, points: { $sum: '$sentiment.negativePoints' } } },
             ]);
-            if ((score?.points || 0) >= AUTO_BAN_POINTS && !chatRoom.bans.some((ban) => String(ban.user) === uid)) {
+            const scorePoints = score?.points || 0;
+            if (scorePoints >= WARNING_POINTS && scorePoints < AUTO_BAN_POINTS) {
+              const priorWarning = chatRoom.warnings.find((warning) => String(warning.user) === uid);
+              if (!priorWarning || priorWarning.createdAt < windowStart) {
+                if (priorWarning) priorWarning.createdAt = new Date();
+                else chatRoom.warnings.push({ user: _id });
+                await chatRoom.save();
+                io.to(`user:${uid}`).emit('room:warning', { roomId: room, message: ROOM_WARNING });
+              }
+            }
+            if (scorePoints >= AUTO_BAN_POINTS && !chatRoom.bans.some((ban) => String(ban.user) === uid)) {
               chatRoom.members.pull(_id);
               chatRoom.bans.push({
                 user: _id,

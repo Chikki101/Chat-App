@@ -23,21 +23,27 @@ export const api = {
   me: (token) => request('/api/auth/me', { token }),
   messages: (room, token) => request(`/api/messages/${room}?limit=50`, { token }),
   directMessages: (userId, token) => request(`/api/messages/dm/${userId}?limit=50`, { token }),
+  unreadCounts: (token) => request('/api/messages/unread', { token }),
+  markRead: (room, token) => request('/api/messages/read', { method: 'POST', body: { room }, token }),
   analyze: (text, token) => request('/api/analyze', { method: 'POST', body: { text }, token }),
   rooms: (token) => request('/api/rooms', { token }),
-  createRoom: (name, token) => request('/api/rooms', { method: 'POST', body: { name }, token }),
+  createRoom: (name, inviteLifetime, token) =>
+    request('/api/rooms', { method: 'POST', body: { name, inviteLifetime }, token }),
   deleteRoom: (roomId, token) =>
     request(`/api/rooms/${roomId.replace('private:', '')}`, { method: 'DELETE', token }),
   joinRoom: (inviteToken, token) =>
     request('/api/rooms/join', { method: 'POST', body: { token: inviteToken }, token }),
-  createInvite: (roomId, token) =>
-    request(`/api/rooms/${roomId.replace('private:', '')}/invite`, { method: 'POST', token }),
+  createInvite: (roomId, inviteLifetime, token) =>
+    request(`/api/rooms/${roomId.replace('private:', '')}/invite`, {
+      method: 'POST', body: { inviteLifetime }, token,
+    }),
   roomMembers: (roomId, token) => request(`/api/rooms/${roomId.replace('private:', '')}/members`, { token }),
   banMember: (roomId, userId, token) =>
     request(`/api/rooms/${roomId.replace('private:', '')}/ban/${userId}`, { method: 'POST', token }),
   unbanMember: (roomId, userId, token) =>
     request(`/api/rooms/${roomId.replace('private:', '')}/ban/${userId}`, { method: 'DELETE', token }),
   friends: (token) => request('/api/friends', { token }),
+  unfriend: (userId, token) => request(`/api/friends/${userId}`, { method: 'DELETE', token }),
   blockedUsers: (token) => request('/api/friends/blocked', { token }),
   blockUser: (userId, token) => request(`/api/friends/${userId}/block`, { method: 'POST', token }),
   unblockUser: (userId, token) => request(`/api/friends/${userId}/block`, { method: 'DELETE', token }),

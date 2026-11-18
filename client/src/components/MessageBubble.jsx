@@ -8,8 +8,8 @@ export default function MessageBubble({ message, isOwn, onOpenProfile }) {
   const tone = message.sentiment?.label || 'neutral';
 
   return (
-    <div className={`msg ${isOwn ? 'own' : ''} tone-${tone}`}>
-      {!isOwn && (
+    <div className={`msg ${isOwn ? 'own' : ''} ${message.system ? 'system' : ''} tone-${tone}`}>
+      {!isOwn && !message.system && (
         <div className="avatar" style={{ background: message.senderColor }}>
           {message.senderName?.[0]?.toUpperCase()}
         </div>
@@ -17,14 +17,16 @@ export default function MessageBubble({ message, isOwn, onOpenProfile }) {
       <div className="bubble">
         <div className="meta">
           {!isOwn && (
-            <button className="message-profile-link" onClick={() => onOpenProfile(message.sender)}>
-              {message.senderName}
-            </button>
+            message.system ? <strong>{message.senderName}</strong> : (
+              <button className="message-profile-link" onClick={() => onOpenProfile(message.sender)}>
+                {message.senderName}
+              </button>
+            )
           )}
           <span>{time}</span>
         </div>
         <p>{message.text}</p>
-        <SentimentBadge sentiment={message.sentiment} />
+        {!message.system && <SentimentBadge sentiment={message.sentiment} />}
       </div>
     </div>
   );

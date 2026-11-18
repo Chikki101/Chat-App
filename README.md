@@ -10,8 +10,10 @@ Every message is classified for sentiment before it is saved and broadcast. The 
 - **Live tone preview** while you type
 - **Room mood meter** summarising the sentiment of the room
 - **Private invite-only rooms** with creator bans, unbans, and automatic moderation
-- Creator room management with persistent room details, fresh invitation-link generation, and permanent room/message deletion
+- Creator room management with persistent room details, configurable invitation-link expiry, and permanent room/message deletion
 - **Mutual friend requests** and real-time one-to-one messaging
+- Unread message badges for rooms and direct conversations
+- Separate unfriend and block controls for friends
 - User profiles with optional email, phone, and bio visible only to the profile owner and accepted friends
 - Blocking that removes friendships and filters blocked users from shared-room messages, typing, presence, and member lists
 - Online-user counts in the general and random rooms
@@ -19,29 +21,34 @@ Every message is classified for sentiment before it is saved and broadcast. The 
 
 ## How the sentiment feature works
 The whole feature is one function, `analyze(text)` in `server/utils/sentiment.js`. It uses the
-quantized DistilBERT model `Xenova/distilbert-base-uncased-finetuned-sst-2-english` through
-Transformers.js. Inference runs on the server CPU; message text is not sent to an AI API. The model
-predicts positive or negative sentiment; low-confidence predictions and text without polarity cues
-are treated as neutral. The model files are downloaded from Hugging Face when sentiment is first
-requested and cached locally.
+quantized three-class Twitter-RoBERTa model `Xenova/twitter-roberta-base-sentiment-latest` through
+Transformers.js. It was trained on social-media text and predicts negative, neutral, or positive
+sentiment. Low-confidence predictions are treated as neutral. Mentions and URLs are normalized
+before classification. Inference runs on the server CPU; message text is not sent to an AI API. The
+model files are downloaded from Hugging Face when sentiment is first requested and cached locally.
 The first analysis therefore takes longer and requires internet access. No AI API key or
 per-request model fee is required.
+
+The public support room also provides preset quick questions and automatic answers for room setup,
+invites, moderation, friend requests, direct messages, blocking, profile privacy, and sentiment rules.
+The answers are fixed guidance based on the app's current features.
 
 1. `server/socket.js` -> inside `message:send` (analyze -> save -> broadcast)
 2. `server/server.js` -> `POST /api/analyze` (powers the live preview)
 
 In private rooms, a negative result adds the model's negative confidence as 0-100 points.
-If a member reaches 500 points across their messages in a rolling five-day window, they are
-automatically removed and banned from that room. The creator can also ban any account by user ID,
+If a member reaches 300 points across their messages in a rolling five-day window, they receive a
+private warning. At 500 points they are automatically removed and banned from that room. The creator can also ban any account by user ID,
 unban accounts, and rotate invitation links. If the creator reaches the automatic threshold, the
 creator remains able to manage the room and unban themselves. Sentiment classification is a moderation aid, not a reliable
 assessment of a person's mental state; sarcasm and context can still be misclassified.
 
-Private-room invitation links grant access to anyone who has the link until the creator rotates it. Creators can revisit room details and generate a new invitation link at any time; generating a new link invalidates the previous one. Deleting a room permanently deletes its messages and disconnects its active members.
+Private-room invitation links grant access to anyone who has the link until it expires or the creator rotates it. Creators can choose no expiry or a lifetime of 1 hour, 1 day, 7 days, or 30 days when creating or rotating a link. Creators can revisit room details and generate a new invitation link at any time; generating a new link invalidates the previous one. Deleting a room permanently deletes its messages and disconnects its active members.
 Direct messages are available only after both users accept the friendship (an incoming request can
 be accepted directly or by sending a request back). Blocking removes the friendship and prevents
 friend requests and direct messages until unblocked; unblocking does not automatically restore the
 friendship. Profile email, phone, and bio are returned only to the profile owner or an accepted friend.
+Unread counts are tracked per account and conversation; opening a conversation marks it as read.
 
 ## Project structure
 ```
@@ -57,7 +64,7 @@ mern-sentiment-chat/
 │   ├── constants.js          # room list
 │   ├── config/db.js
 │   ├── middleware/auth.js    # JWT guard
-│   ├── models/{User,Message,ChatRoom,Friendship,Block}.js
+│   ├── models/{User,Message,ChatRoom,Friendship,Block,ConversationRead}.js
 │   ├── routes/{auth,messages,rooms,friends,users}.js
 │   └── utils/                 # sentiment analysis and conversation access
 └── client/
@@ -81,9 +88,8 @@ first analysis, so allow outbound access to Hugging Face and retain the model ca
 to avoid downloading it again after restarts.
 By default, the model cache is `~/.cache/moodchat/transformers`; set `SENTIMENT_CACHE_DIR` to a
 persistent writable directory on your deployment host if its application filesystem is ephemeral.
-The downloaded quantized weights are about 65 MiB, and the backend used about 300 MiB of memory
-after loading the model in local testing; select a host with at least 512 MiB of RAM and leave some
-headroom for the runtime and database client.
+The selected int8 weights are about 126 MiB; select a host with at least 512 MiB of RAM and leave
+headroom for model inference, the runtime, and the database client.
 
 ```bash
 # 1. install everything

@@ -12,12 +12,27 @@ import { blockedUserIds } from '../utils/blocks.js';
 
 const router = Router();
 const inviteHash = (token) => createHash('sha256').update(token).digest('hex');
+const inviteLifetimes = new Map([
+  ['never', null],
+  ['1h', 60 * 60 * 1000],
+  ['1d', 24 * 60 * 60 * 1000],
+  ['7d', 7 * 24 * 60 * 60 * 1000],
+  ['30d', 30 * 24 * 60 * 60 * 1000],
+]);
+const invitationExpiry = (lifetime) => {
+  if (!inviteLifetimes.has(lifetime)) return undefined;
+  const duration = inviteLifetimes.get(lifetime);
+  return duration === null ? null : new Date(Date.now() + duration);
+};
 const roomRecord = (room, userId) => ({
   id: privateRoomKey(room._id),
   name: room.name,
   creatorId: String(room.creator),
   memberCount: room.members.length,
   createdAt: room.createdAt,
+  ...(String(room.creator) === String(userId)
+    ? { inviteExpiresAt: room.inviteExpiresAt || null }
+    : {}),
   isCreator: String(room.creator) === String(userId),
   kind: 'private',
 });
@@ -47,12 +62,17 @@ router.post('/', async (req, res) => {
     if (name.length < 2 || name.length > 40) {
       return res.status(400).json({ message: 'Room name must be 2-40 characters' });
     }
+    const expiresAt = invitationExpiry(req.body?.inviteLifetime ?? 'never');
+    if (expiresAt === undefined) {
+      return res.status(400).json({ message: 'Choose a valid invitation expiry' });
+    }
     const inviteToken = randomBytes(32).toString('hex');
     const room = await ChatRoom.create({
       name,
       creator: req.user._id,
       members: [req.user._id],
       inviteHash: inviteHash(inviteToken),
+      inviteExpiresAt: expiresAt,
     });
     res.status(201).json({ room: roomRecord(room, req.user._id), inviteToken });
   } catch (err) {
@@ -69,6 +89,9 @@ router.post('/join', async (req, res) => {
     }
     const room = await ChatRoom.findOne({ inviteHash: inviteHash(token), deleting: { $ne: true } });
     if (!room) return res.status(404).json({ message: 'Invitation link is invalid or has expired' });
+    if (room.inviteExpiresAt && room.inviteExpiresAt <= new Date()) {
+      return res.status(404).json({ message: 'Invitation link is invalid or has expired' });
+    }
     if (room.bans.some((ban) => String(ban.user) === String(req.user._id))) {
       return res.status(403).json({ message: 'You are banned from this room' });
     }
@@ -93,8 +116,13 @@ router.post('/:roomId/invite', async (req, res) => {
       return res.status(403).json({ message: 'Only the room creator can create invitations' });
     }
     if (room.deleting) return res.status(404).json({ message: 'Room not found' });
+    const expiresAt = invitationExpiry(req.body?.inviteLifetime ?? 'never');
+    if (expiresAt === undefined) {
+      return res.status(400).json({ message: 'Choose a valid invitation expiry' });
+    }
     const inviteToken = randomBytes(32).toString('hex');
     room.inviteHash = inviteHash(inviteToken);
+    room.inviteExpiresAt = expiresAt;
     await room.save();
     res.json({ inviteToken });
   } catch (err) {

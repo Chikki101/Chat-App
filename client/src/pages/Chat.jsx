@@ -12,6 +12,12 @@ import emptyChat from '../assets/empty-chat.svg';
 
 const publicRooms = ROOMS.map((room) => ({ ...room, kind: 'public' }));
 const dmKey = (first, second) => `dm:${[first, second].sort().join(':')}`;
+const SUPPORT_QUESTIONS = [
+  'How do I create a room?',
+  'How do I invite someone?',
+  'How do I ban or unban a member?',
+  'How do I message a friend?',
+];
 
 function readInviteToken(value) {
   try {
@@ -29,12 +35,15 @@ export default function Chat() {
   const [blockData, setBlockData] = useState({ blocked: [], hiddenIds: [] });
   const [profileUserId, setProfileUserId] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [unreadCounts, setUnreadCounts] = useState({});
+  const [warningMessage, setWarningMessage] = useState('');
   const [online, setOnline] = useState([]);
   const [roomCounts, setRoomCounts] = useState({ general: 0, random: 0 });
   const [typers, setTypers] = useState({});
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState('');
   const [roomName, setRoomName] = useState('');
+  const [inviteLifetime, setInviteLifetime] = useState('never');
   const [inviteInput, setInviteInput] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
   const [friendId, setFriendId] = useState('');
@@ -50,6 +59,8 @@ export default function Chat() {
   const roomMembersRef = useRef(roomMembers);
   const bottomRef = useRef(null);
   const inviteHandledRef = useRef(false);
+  const unreadSnapshotRef = useRef(0);
+  const pendingUnreadRef = useRef(new Map());
   roomMembersRef.current = roomMembers;
 
   const refreshFriends = useCallback(async () => {
@@ -60,6 +71,34 @@ export default function Chat() {
   const refreshBlocked = useCallback(async () => {
     setBlockData(await api.blockedUsers(token));
   }, [token]);
+
+  const refreshUnreadCounts = useCallback(async () => {
+    const { unread, asOf } = await api.unreadCounts(token);
+    const snapshot = new Date(asOf).getTime();
+    unreadSnapshotRef.current = snapshot;
+    const activeRoom = roomRef.current;
+    for (const [messageId, event] of pendingUnreadRef.current) {
+      if (
+        event.createdAt <= snapshot ||
+        event.room === activeRoom ||
+        !(event.room in unread)
+      ) {
+        pendingUnreadRef.current.delete(messageId);
+        continue;
+      }
+      unread[event.room] = (unread[event.room] || 0) + 1;
+    }
+    delete unread[activeRoom];
+    setUnreadCounts(unread);
+  }, [token]);
+
+  const clearPendingDirectReads = useCallback((userIds) => {
+    for (const [messageId, event] of pendingUnreadRef.current) {
+      if (!event.room.startsWith('dm:')) continue;
+      const partnerId = event.room.split(':').find((id) => id !== user.id);
+      if (partnerId && userIds.includes(partnerId)) pendingUnreadRef.current.delete(messageId);
+    }
+  }, [user.id]);
 
   const refreshRooms = useCallback(async () => {
     const data = await api.rooms(token);
@@ -81,8 +120,9 @@ export default function Chat() {
   };
 
   useEffect(() => {
-    Promise.all([refreshRooms(), refreshFriends(), refreshBlocked()]).catch((e) => setError(e.message));
-  }, [refreshBlocked, refreshFriends, refreshRooms]);
+    Promise.all([refreshRooms(), refreshFriends(), refreshBlocked(), refreshUnreadCounts()])
+      .catch((e) => setError(e.message));
+  }, [refreshBlocked, refreshFriends, refreshRooms, refreshUnreadCounts]);
 
   useEffect(() => {
     const inviteToken = new URLSearchParams(window.location.search).get('invite');
@@ -103,6 +143,7 @@ export default function Chat() {
 
     socket.on('connect', () => {
       setConnected(true);
+      refreshUnreadCounts().catch((e) => setError(e.message));
       socket.emit('room:join', { room: roomRef.current }, (result) => {
         if (!result?.ok) setError(result?.error || 'Could not join conversation');
       });
@@ -114,12 +155,28 @@ export default function Chat() {
     });
     socket.on('presence', setOnline);
     socket.on('presence:rooms', setRoomCounts);
-    socket.on('friends:changed', () => {
+    socket.on('friends:changed', ({ userIds = [] } = {}) => {
+      clearPendingDirectReads(userIds);
       refreshFriends().catch((e) => setError(e.message));
+      refreshUnreadCounts().catch((e) => setError(e.message));
+      const partnerId = roomRef.current.startsWith('dm:')
+        ? roomRef.current.slice(3).split(':').find((id) => id !== user.id)
+        : null;
+      if (partnerId && userIds.includes(partnerId)) {
+        setRoom('general');
+        setError('This conversation is no longer available because the friendship changed.');
+      }
     });
     socket.on('blocks:changed', ({ userIds = [] } = {}) => {
+      clearPendingDirectReads(userIds);
+      for (const [messageId, event] of pendingUnreadRef.current) {
+        if (event.senderId && event.senderId !== user.id && userIds.includes(event.senderId)) {
+          pendingUnreadRef.current.delete(messageId);
+        }
+      }
       refreshFriends().catch((e) => setError(e.message));
       refreshBlocked().catch((e) => setError(e.message));
+      refreshUnreadCounts().catch((e) => setError(e.message));
       const partnerId = roomRef.current.startsWith('dm:')
         ? roomRef.current.slice(3).split(':').find((id) => id !== user.id)
         : null;
@@ -131,6 +188,21 @@ export default function Chat() {
     socket.on('message:new', (msg) => {
       if (msg.room !== roomRef.current) return;
       setMessages((prev) => (prev.some((m) => m._id === msg._id) ? prev : [...prev, msg]));
+    });
+    socket.on('room:unread', ({ room: unreadRoom, messageId, createdAt, senderId }) => {
+      if (!unreadRoom) return;
+      if (unreadRoom === roomRef.current) {
+        pendingUnreadRef.current.delete(messageId);
+        api.markRead(unreadRoom, token).catch((e) => setError(e.message));
+        return;
+      }
+      const eventTime = new Date(createdAt).getTime();
+      if (eventTime <= unreadSnapshotRef.current || pendingUnreadRef.current.has(messageId)) return;
+      pendingUnreadRef.current.set(messageId, { room: unreadRoom, createdAt: eventTime, senderId });
+      setUnreadCounts((prev) => ({ ...prev, [unreadRoom]: (prev[unreadRoom] || 0) + 1 }));
+    });
+    socket.on('room:warning', ({ message }) => {
+      setWarningMessage(message);
     });
     socket.on('typing', ({ username, isTyping }) => {
       setTypers((prev) => {
@@ -145,9 +217,11 @@ export default function Chat() {
       setError(message);
       selectConversation('general');
       refreshRooms().catch((e) => setError(e.message));
+      refreshUnreadCounts().catch((e) => setError(e.message));
     });
     socket.on('room:deleted', ({ roomId, roomName }) => {
       refreshRooms().catch((e) => setError(e.message));
+      refreshUnreadCounts().catch((e) => setError(e.message));
       if (roomRef.current === roomId) {
         setRoom('general');
         setInviteUrl('');
@@ -175,13 +249,23 @@ export default function Chat() {
     return () => socket.disconnect();
     // The active conversation is rejoined by the room effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshBlocked, refreshFriends, refreshRooms, token, user.id]);
+  }, [clearPendingDirectReads, refreshBlocked, refreshFriends, refreshRooms, refreshUnreadCounts, token, user.id]);
 
   useEffect(() => {
     roomRef.current = room;
+    setUnreadCounts((prev) => {
+      if (!prev[room]) return prev;
+      const next = { ...prev };
+      delete next[room];
+      return next;
+    });
+    for (const [messageId, event] of pendingUnreadRef.current) {
+      if (event.room === room) pendingUnreadRef.current.delete(messageId);
+    }
     setMessages([]);
     setTypers({});
     setRoomMembers(null);
+    api.markRead(room, token).catch((e) => setError(e.message));
     if (connected) {
       socketRef.current?.emit('room:join', { room }, (result) => {
         if (!result?.ok) setError(result?.error || 'Could not join conversation');
@@ -225,7 +309,7 @@ export default function Chat() {
   const createRoom = async (event) => {
     event.preventDefault();
     try {
-      const { room: created, inviteToken } = await api.createRoom(roomName, token);
+      const { room: created, inviteToken } = await api.createRoom(roomName, inviteLifetime, token);
       setRooms((items) => [...items, created]);
       setRoom(created.id);
       setRoomName('');
@@ -250,9 +334,10 @@ export default function Chat() {
 
   const createInvite = async () => {
     try {
-      const { inviteToken } = await api.createInvite(room, token);
+      const { inviteToken } = await api.createInvite(room, inviteLifetime, token);
       setInviteUrl(`${window.location.origin}/?invite=${inviteToken}`);
       setInviteCopied(false);
+      await refreshRooms();
     } catch (e) {
       setError(e.message);
     }
@@ -308,6 +393,20 @@ export default function Chat() {
     } catch (e) {
       setError(e.message);
       return false;
+    }
+  };
+
+  const unfriendUser = async (targetId) => {
+    const friend = friends.friends.find((item) => item.id === targetId);
+    if (!window.confirm(`Remove ${friend?.username || 'this user'} from your friends?`)) return;
+    try {
+      await api.unfriend(targetId, token);
+      await refreshFriends();
+      if (roomRef.current.startsWith('dm:') && roomRef.current.split(':').includes(targetId)) {
+        setRoom('general');
+      }
+    } catch (e) {
+      setError(e.message);
     }
   };
 
@@ -405,6 +504,11 @@ export default function Chat() {
             <li key={item.id}>
               <button className={item.id === room ? 'active' : ''} onClick={() => selectConversation(item.id)}>
                 # {item.name}
+                {unreadCounts[item.id] > 0 && (
+                  <span className="unread-badge" aria-label={`${unreadCounts[item.id]} unread messages`}>
+                    {unreadCounts[item.id] > 99 ? '99+' : unreadCounts[item.id]}
+                  </span>
+                )}
                 {(item.id === 'general' || item.id === 'random') && (
                   <span className="room-count">{roomCounts[item.id] || 0} online</span>
                 )}
@@ -415,6 +519,16 @@ export default function Chat() {
 
         <div className="sidebar-section">
           <h4>Private rooms</h4>
+          <label className="invite-expiry-choice">
+            Invitation expiry
+            <select value={inviteLifetime} onChange={(event) => setInviteLifetime(event.target.value)}>
+              <option value="never">Never expires</option>
+              <option value="1h">1 hour</option>
+              <option value="1d">1 day</option>
+              <option value="7d">7 days</option>
+              <option value="30d">30 days</option>
+            </select>
+          </label>
           <form className="sidebar-form" onSubmit={createRoom}>
             <input
               value={roomName}
@@ -485,17 +599,30 @@ export default function Chat() {
             </div>
           ))}
           <ul className="online">
-            {friends.friends.map((friend) => (
-              <li key={friend.id}>
-                <span className="dot" style={{ background: friend.avatarColor }} />
-                <button className="friend-name" onClick={() => setProfileUserId(friend.id)}>{friend.username}</button>
-                <button
-                  className={`friend-chat ${dmKey(user.id, friend.id) === room ? 'active' : ''}`}
-                  onClick={() => selectConversation(dmKey(user.id, friend.id))}
-                  aria-label={`Chat with ${friend.username}`}
-                >Chat</button>
-              </li>
-            ))}
+            {friends.friends.map((friend) => {
+              const directId = dmKey(user.id, friend.id);
+              return (
+                <li className="friend-item" key={friend.id}>
+                  <div className="friend-heading">
+                    <span className="dot" style={{ background: friend.avatarColor }} />
+                    <button className="friend-name" onClick={() => setProfileUserId(friend.id)}>{friend.username}</button>
+                    {unreadCounts[directId] > 0 && (
+                      <span className="unread-badge" aria-label={`${unreadCounts[directId]} unread messages`}>
+                        {unreadCounts[directId] > 99 ? '99+' : unreadCounts[directId]}
+                      </span>
+                    )}
+                  </div>
+                  <div className="friend-actions">
+                    <button
+                      className={`friend-action ${directId === room ? 'active' : ''}`}
+                      onClick={() => selectConversation(directId)}
+                    >Chat</button>
+                    <button className="friend-action" onClick={() => unfriendUser(friend.id)}>Unfriend</button>
+                    <button className="friend-action danger" onClick={() => blockUser(friend.id)}>Block</button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
           {blockData.blocked.length > 0 && (
             <div className="sidebar-card">
@@ -536,7 +663,22 @@ export default function Chat() {
               <strong>{currentRoom.name}</strong>
               <span>{currentRoom.memberCount} members · invitation only</span>
               <span>Created {new Date(currentRoom.createdAt).toLocaleDateString()}</span>
+              <span>
+                Invitation {currentRoom.inviteExpiresAt
+                  ? `expires ${new Date(currentRoom.inviteExpiresAt).toLocaleString()}`
+                  : 'does not expire'}
+              </span>
             </div>
+            <label className="invite-expiry-choice">
+              New invitation expiry
+              <select value={inviteLifetime} onChange={(event) => setInviteLifetime(event.target.value)}>
+                <option value="never">Never expires</option>
+                <option value="1h">1 hour</option>
+                <option value="1d">1 day</option>
+                <option value="7d">7 days</option>
+                <option value="30d">30 days</option>
+              </select>
+            </label>
             <button className="wide-button" onClick={createInvite}>Create invitation link</button>
             {inviteUrl && (
               <div className="sidebar-card">
@@ -613,6 +755,17 @@ export default function Chat() {
 
         <MoodSummary messages={messages} />
 
+        {room === 'support' && (
+          <div className="support-faq" aria-label="Frequently asked questions">
+            <span>Quick answers</span>
+            {SUPPORT_QUESTIONS.map((question) => (
+              <button key={question} type="button" disabled={!connected} onClick={() => sendMessage(question)}>
+                {question}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="messages">
           {messages.length === 0 ? (
             <div className="empty">
@@ -624,7 +777,7 @@ export default function Chat() {
               <MessageBubble
                 key={message._id}
                 message={message}
-                isOwn={message.sender === user.id}
+                isOwn={!message.system && message.sender === user.id}
                 onOpenProfile={setProfileUserId}
               />
             ))
@@ -636,6 +789,12 @@ export default function Chat() {
         {error && (
           <div className="error toast" onClick={() => setError('')} role="alert">
             {error} (click to dismiss)
+          </div>
+        )}
+        {warningMessage && (
+          <div className="warning-toast" role="alert">
+            <span>{warningMessage}</span>
+            <button onClick={() => setWarningMessage('')} aria-label="Dismiss warning">×</button>
           </div>
         )}
 

@@ -3,9 +3,17 @@ import mongoose from 'mongoose';
 const messageSchema = new mongoose.Schema(
   {
     room: { type: String, required: true },
-    sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    sender: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      required() {
+        return !this.system;
+      },
+    },
     senderName: { type: String, required: true },
     senderColor: { type: String, default: '#6366f1' },
+    system: { type: Boolean, default: false },
     text: { type: String, required: true, maxlength: 500 },
     // Result of the AI sentiment analysis, stored with every message
     sentiment: {

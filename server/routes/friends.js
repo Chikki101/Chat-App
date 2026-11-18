@@ -14,7 +14,8 @@ const userSummary = (user) => ({
 });
 const notifyFriends = (io, userIds) => {
   if (!io) return;
-  for (const userId of userIds) io.to(`user:${userId}`).emit('friends:changed');
+  const uniqueIds = [...new Set(userIds.map(String))];
+  for (const userId of uniqueIds) io.to(`user:${userId}`).emit('friends:changed', { userIds: uniqueIds });
 };
 const notifyBlockChange = async (io, userIds) => {
   if (!io) return;
@@ -179,6 +180,27 @@ router.delete('/:userId/block', async (req, res) => {
   } catch (err) {
     console.error('friends:unblock failed', err);
     res.status(500).json({ message: 'Could not unblock user' });
+  }
+});
+
+router.delete('/:userId', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.userId) || String(req.user._id) === req.params.userId) {
+      return res.status(400).json({ message: 'Invalid friend id' });
+    }
+    const result = await Friendship.deleteMany({
+      status: 'accepted',
+      $or: [
+        { from: req.user._id, to: req.params.userId },
+        { from: req.params.userId, to: req.user._id },
+      ],
+    });
+    if (!result.deletedCount) return res.status(404).json({ message: 'Friendship not found' });
+    notifyFriends(req.app.locals.io, [req.user._id, req.params.userId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('friends:unfriend failed', err);
+    res.status(500).json({ message: 'Could not remove friend' });
   }
 });
 
