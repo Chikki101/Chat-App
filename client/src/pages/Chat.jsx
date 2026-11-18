@@ -38,6 +38,8 @@ export default function Chat() {
   const [friendSearch, setFriendSearch] = useState(null);
   const [roomMembers, setRoomMembers] = useState(null);
   const [banTargetId, setBanTargetId] = useState('');
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const inviteInputRef = useRef(null);
 
   const socketRef = useRef(null);
   const roomRef = useRef(room);
@@ -67,6 +69,7 @@ export default function Chat() {
 
   const selectConversation = (conversationId) => {
     setInviteUrl('');
+    setInviteCopied(false);
     setRoom(conversationId);
   };
 
@@ -152,7 +155,6 @@ export default function Chat() {
     setMessages([]);
     setTypers({});
     setRoomMembers(null);
-    setInviteUrl('');
     if (connected) {
       socketRef.current?.emit('room:join', { room }, (result) => {
         if (!result?.ok) setError(result?.error || 'Could not join conversation');
@@ -180,7 +182,7 @@ export default function Chat() {
     return () => {
       cancelled = true;
     };
-  }, [connected, currentRoom, room, token, user.id]);
+  }, [connected, room, token, user.id]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -201,6 +203,7 @@ export default function Chat() {
       setRoom(created.id);
       setRoomName('');
       setInviteUrl(`${window.location.origin}/?invite=${inviteToken}`);
+      setInviteCopied(false);
     } catch (e) {
       setError(e.message);
     }
@@ -222,6 +225,7 @@ export default function Chat() {
     try {
       const { inviteToken } = await api.createInvite(room, token);
       setInviteUrl(`${window.location.origin}/?invite=${inviteToken}`);
+      setInviteCopied(false);
     } catch (e) {
       setError(e.message);
     }
@@ -287,10 +291,21 @@ export default function Chat() {
   };
 
   const copyInvite = async () => {
+    if (!inviteUrl) return;
     try {
       await navigator.clipboard.writeText(inviteUrl);
+      setInviteCopied(true);
     } catch {
-      setError('Select and copy the invitation link shown below');
+      const input = inviteInputRef.current;
+      if (input) {
+        input.focus();
+        input.select();
+        if (document.execCommand('copy')) {
+          setInviteCopied(true);
+          return;
+        }
+      }
+      setError('Copy was blocked. Select the invitation link and copy it manually.');
     }
   };
 
@@ -418,8 +433,16 @@ export default function Chat() {
             <button className="wide-button" onClick={createInvite}>Create invitation link</button>
             {inviteUrl && (
               <div className="sidebar-card">
-                <input aria-label="Invitation link" readOnly value={inviteUrl} onFocus={(event) => event.target.select()} />
-                <button onClick={copyInvite}>Copy link</button>
+                <input
+                  ref={inviteInputRef}
+                  aria-label="Invitation link"
+                  readOnly
+                  value={inviteUrl}
+                  onFocus={(event) => event.target.select()}
+                />
+                <button type="button" onClick={copyInvite}>
+                  {inviteCopied ? 'Copied!' : 'Copy link'}
+                </button>
               </div>
             )}
             <button className="wide-button" onClick={manageRoom}>Manage members and bans</button>
