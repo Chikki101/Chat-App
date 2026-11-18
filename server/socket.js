@@ -7,6 +7,7 @@ import { analyze } from './utils/sentiment.js';
 import { ROOMS } from './constants.js';
 import { canAccessConversation, privateRoomId } from './utils/chatAccess.js';
 import { ejectRoomUser } from './utils/ejectRoomUser.js';
+import { blockedUserIds, blockedUsersAmong } from './utils/blocks.js';
 
 const AUTO_BAN_POINTS = 500;
 const SCORE_WINDOW_MS = 5 * 24 * 60 * 60 * 1000;
@@ -22,11 +23,18 @@ export function initSocket(httpServer, clientOrigin) {
 
   const online = new Map();
 
-  const broadcastPresence = () =>
-    io.emit(
-      'presence',
-      [...online.values()].map(({ id, username, avatarColor }) => ({ id, username, avatarColor }))
-    );
+  const broadcastPresence = async () => {
+    const users = [...online.values()].map(({ id, username, avatarColor }) => ({ id, username, avatarColor }));
+    const hiddenByUser = await blockedUsersAmong(users.map((user) => user.id));
+    for (const socket of io.sockets.sockets.values()) {
+      const hiddenIds = hiddenByUser.get(socket.data.userId) || new Set();
+      socket.emit(
+        'presence',
+        users.filter((user) => user.id === socket.data.userId || !hiddenIds.has(user.id))
+      );
+    }
+  };
+  io.broadcastPresence = broadcastPresence;
 
   const broadcastRoomCounts = async () => {
     const counts = await Promise.all(
@@ -59,7 +67,7 @@ export function initSocket(httpServer, clientOrigin) {
     const entry = online.get(uid) || { id: uid, username, avatarColor, count: 0 };
     entry.count += 1;
     online.set(uid, entry);
-    broadcastPresence();
+    broadcastPresence().catch((err) => console.error('presence broadcast failed', err));
     broadcastRoomCounts().catch((err) => console.error('room presence broadcast failed', err));
 
     socket.on('room:join', async (payload, ack) => {
@@ -77,7 +85,13 @@ export function initSocket(httpServer, clientOrigin) {
         }
         await socket.join(room);
         if (privateRoomId(room)) {
-          io.to(room).emit('room:member-joined', { roomId: room, userId: uid });
+          const roomSockets = await io.in(room).fetchSockets();
+          const hiddenIds = await blockedUserIds(uid, roomSockets.map((roomSocket) => roomSocket.data.userId));
+          for (const roomSocket of roomSockets) {
+            if (!hiddenIds.has(roomSocket.data.userId)) {
+              roomSocket.emit('room:member-joined', { roomId: room, userId: uid });
+            }
+          }
         }
         await broadcastRoomCounts();
         ack?.({ ok: true, room });
@@ -99,6 +113,13 @@ export function initSocket(httpServer, clientOrigin) {
         }
 
         const sentiment = await analyze(clean);
+        const privateId = privateRoomId(room);
+        if (
+          privateId &&
+          !(await ChatRoom.exists({ _id: privateId, members: _id, deleting: { $ne: true } }))
+        ) {
+          return ack?.({ ok: false, error: 'You do not have access to this conversation' });
+        }
         const msg = await Message.create({
           room,
           sender: _id,
@@ -107,8 +128,15 @@ export function initSocket(httpServer, clientOrigin) {
           text: clean,
           sentiment,
         });
+        if (
+          privateId &&
+          !(await ChatRoom.exists({ _id: privateId, members: _id, deleting: { $ne: true } }))
+        ) {
+          await msg.deleteOne();
+          return ack?.({ ok: false, error: 'You do not have access to this conversation' });
+        }
 
-        io.to(room).emit('message:new', {
+        const message = {
           _id: String(msg._id),
           room,
           sender: uid,
@@ -117,9 +145,13 @@ export function initSocket(httpServer, clientOrigin) {
           text: clean,
           sentiment,
           createdAt: msg.createdAt,
-        });
+        };
+        const roomSockets = await io.in(room).fetchSockets();
+        const hiddenIds = await blockedUserIds(uid, roomSockets.map((roomSocket) => roomSocket.data.userId));
+        for (const roomSocket of roomSockets) {
+          if (!hiddenIds.has(roomSocket.data.userId)) roomSocket.emit('message:new', message);
+        }
 
-        const privateId = privateRoomId(room);
         if (privateId && sentiment.negativePoints > 0) {
           const chatRoom = await ChatRoom.findById(privateId).select('creator members bans');
           if (chatRoom) {
@@ -140,13 +172,22 @@ export function initSocket(httpServer, clientOrigin) {
                 roomId: room,
                 message: 'You were removed after reaching 500 negative sentiment points in the last five days',
               };
-              io.to(room).emit('room:member-banned', {
-                roomId: room,
-                userId: uid,
-                username,
-                reason: chatRoom.bans.at(-1).reason,
-                source: 'sentiment',
-              });
+              const recipients = await io.in(room).fetchSockets();
+              const hiddenByBanTarget = await blockedUserIds(
+                uid,
+                recipients.map((recipient) => recipient.data.userId)
+              );
+              for (const recipient of recipients) {
+                if (!hiddenByBanTarget.has(recipient.data.userId)) {
+                  recipient.emit('room:member-banned', {
+                    roomId: room,
+                    userId: uid,
+                    username,
+                    reason: chatRoom.bans.at(-1).reason,
+                    source: 'sentiment',
+                  });
+                }
+              }
               await ejectRoomUser(io, chatRoom._id, _id, kick.message);
               await broadcastRoomCounts();
             }
@@ -169,7 +210,13 @@ export function initSocket(httpServer, clientOrigin) {
         ) {
           return;
         }
-        socket.to(room).emit('typing', { username, isTyping: !!isTyping });
+        const recipients = await io.in(room).fetchSockets();
+        const hiddenIds = await blockedUserIds(uid, recipients.map((recipient) => recipient.data.userId));
+        for (const recipient of recipients) {
+          if (recipient.id !== socket.id && !hiddenIds.has(recipient.data.userId)) {
+            recipient.emit('typing', { username, isTyping: !!isTyping });
+          }
+        }
       } catch (err) {
         console.error('typing event failed', err);
       }
@@ -189,7 +236,7 @@ export function initSocket(httpServer, clientOrigin) {
         current.count -= 1;
         if (current.count <= 0) online.delete(uid);
       }
-      broadcastPresence();
+      broadcastPresence().catch((err) => console.error('presence broadcast failed', err));
       broadcastRoomCounts().catch((err) => console.error('room presence broadcast failed', err));
     });
   });

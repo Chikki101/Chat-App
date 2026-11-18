@@ -6,6 +6,7 @@ import { ROOMS } from '../constants.js';
 import MessageBubble from '../components/MessageBubble.jsx';
 import MessageInput from '../components/MessageInput.jsx';
 import MoodSummary from '../components/MoodSummary.jsx';
+import ProfilePanel from '../components/ProfilePanel.jsx';
 import logo from '../assets/logo.svg';
 import emptyChat from '../assets/empty-chat.svg';
 
@@ -25,6 +26,8 @@ export default function Chat() {
   const [room, setRoom] = useState('general');
   const [rooms, setRooms] = useState(publicRooms);
   const [friends, setFriends] = useState({ friends: [], incoming: [], outgoing: [] });
+  const [blockData, setBlockData] = useState({ blocked: [], hiddenIds: [] });
+  const [profileUserId, setProfileUserId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [online, setOnline] = useState([]);
   const [roomCounts, setRoomCounts] = useState({ general: 0, random: 0 });
@@ -54,6 +57,10 @@ export default function Chat() {
     setFriends(data);
   }, [token]);
 
+  const refreshBlocked = useCallback(async () => {
+    setBlockData(await api.blockedUsers(token));
+  }, [token]);
+
   const refreshRooms = useCallback(async () => {
     const data = await api.rooms(token);
     setRooms([...publicRooms, ...data.rooms.filter((item) => item.kind === 'private')]);
@@ -74,8 +81,8 @@ export default function Chat() {
   };
 
   useEffect(() => {
-    Promise.all([refreshRooms(), refreshFriends()]).catch((e) => setError(e.message));
-  }, [refreshFriends, refreshRooms]);
+    Promise.all([refreshRooms(), refreshFriends(), refreshBlocked()]).catch((e) => setError(e.message));
+  }, [refreshBlocked, refreshFriends, refreshRooms]);
 
   useEffect(() => {
     const inviteToken = new URLSearchParams(window.location.search).get('invite');
@@ -110,6 +117,17 @@ export default function Chat() {
     socket.on('friends:changed', () => {
       refreshFriends().catch((e) => setError(e.message));
     });
+    socket.on('blocks:changed', ({ userIds = [] } = {}) => {
+      refreshFriends().catch((e) => setError(e.message));
+      refreshBlocked().catch((e) => setError(e.message));
+      const partnerId = roomRef.current.startsWith('dm:')
+        ? roomRef.current.slice(3).split(':').find((id) => id !== user.id)
+        : null;
+      if (partnerId && userIds.includes(partnerId)) {
+        setRoom('general');
+        setError('This conversation is no longer available because one of its users was blocked.');
+      }
+    });
     socket.on('message:new', (msg) => {
       if (msg.room !== roomRef.current) return;
       setMessages((prev) => (prev.some((m) => m._id === msg._id) ? prev : [...prev, msg]));
@@ -127,6 +145,15 @@ export default function Chat() {
       setError(message);
       selectConversation('general');
       refreshRooms().catch((e) => setError(e.message));
+    });
+    socket.on('room:deleted', ({ roomId, roomName }) => {
+      refreshRooms().catch((e) => setError(e.message));
+      if (roomRef.current === roomId) {
+        setRoom('general');
+        setInviteUrl('');
+        setRoomMembers(null);
+        setError(`The room "${roomName}" was deleted by its creator.`);
+      }
     });
     socket.on('room:member-banned', ({ roomId }) => {
       if (roomRef.current === roomId && currentRoomRef.current?.isCreator) {
@@ -148,7 +175,7 @@ export default function Chat() {
     return () => socket.disconnect();
     // The active conversation is rejoined by the room effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshFriends, refreshRooms, token]);
+  }, [refreshBlocked, refreshFriends, refreshRooms, token, user.id]);
 
   useEffect(() => {
     roomRef.current = room;
@@ -253,6 +280,37 @@ export default function Chat() {
     }
   };
 
+  const blockUser = async (targetId) => {
+    try {
+      await api.blockUser(targetId, token);
+      await Promise.all([refreshFriends(), refreshBlocked()]);
+      if (roomRef.current.startsWith('dm:') && roomRef.current.split(':').includes(targetId)) {
+        setRoom('general');
+      }
+      if (friendSearch?.user.id === targetId) {
+        setFriendSearch((current) => ({ ...current, relationship: 'blocked' }));
+      }
+      return true;
+    } catch (e) {
+      setError(e.message);
+      return false;
+    }
+  };
+
+  const unblockUser = async (targetId) => {
+    try {
+      await api.unblockUser(targetId, token);
+      await refreshBlocked();
+      if (friendSearch?.user.id === targetId) {
+        setFriendSearch((current) => ({ ...current, relationship: 'none' }));
+      }
+      return true;
+    } catch (e) {
+      setError(e.message);
+      return false;
+    }
+  };
+
   const respondToFriend = async (targetId, accept) => {
     try {
       await api.respondFriend(targetId, accept, token);
@@ -285,6 +343,21 @@ export default function Chat() {
     try {
       await api.unbanMember(room, memberId, token);
       setRoomMembers(await api.roomMembers(room, token));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const deleteRoom = async () => {
+    if (!window.confirm(`Permanently delete "${currentRoom?.name}" and all of its messages? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await api.deleteRoom(room, token);
+      setInviteUrl('');
+      setRoomMembers(null);
+      setRoom('general');
+      await refreshRooms();
     } catch (e) {
       setError(e.message);
     }
@@ -379,6 +452,7 @@ export default function Chat() {
             <div className="sidebar-card">
               <strong>{friendSearch.user.username}</strong>
               <code>{friendSearch.user.id}</code>
+              <button className="subtle-button" onClick={() => setProfileUserId(friendSearch.user.id)}>View profile</button>
               {friendSearch.relationship === 'none' && (
                 <button onClick={() => addFriend(friendSearch.user.id)}>Add friend</button>
               )}
@@ -387,31 +461,55 @@ export default function Chat() {
               )}
               {friendSearch.relationship === 'outgoing' && <span>Request sent</span>}
               {friendSearch.relationship === 'friends' && <span>Friends</span>}
+              {friendSearch.relationship === 'blocked' && <span>Blocked</span>}
+              {blockData.blocked.some((item) => item.id === friendSearch.user.id) ? (
+                <button className="subtle-button" onClick={() => unblockUser(friendSearch.user.id)}>Unblock</button>
+              ) : (
+                <button className="subtle-button" onClick={() => blockUser(friendSearch.user.id)}>Block</button>
+              )}
             </div>
           )}
           {friends.incoming.map((request) => (
             <div className="sidebar-card" key={request.id}>
               <span>{request.username} wants to connect</span>
+              <button className="subtle-button" onClick={() => setProfileUserId(request.id)}>View profile</button>
               <button onClick={() => respondToFriend(request.id, true)}>Accept</button>
               <button className="subtle-button" onClick={() => respondToFriend(request.id, false)}>Decline</button>
             </div>
           ))}
           {friends.outgoing.map((request) => (
-            <div className="sidebar-card" key={request.id}>{request.username} (request sent)</div>
+            <div className="sidebar-card" key={request.id}>
+              {request.username} (request sent)
+              <button className="subtle-button" onClick={() => setProfileUserId(request.id)}>View profile</button>
+              <button className="subtle-button" onClick={() => blockUser(request.id)}>Block</button>
+            </div>
           ))}
           <ul className="online">
             {friends.friends.map((friend) => (
               <li key={friend.id}>
+                <span className="dot" style={{ background: friend.avatarColor }} />
+                <button className="friend-name" onClick={() => setProfileUserId(friend.id)}>{friend.username}</button>
                 <button
-                  className={`friend-link ${dmKey(user.id, friend.id) === room ? 'active' : ''}`}
+                  className={`friend-chat ${dmKey(user.id, friend.id) === room ? 'active' : ''}`}
                   onClick={() => selectConversation(dmKey(user.id, friend.id))}
-                >
-                  <span className="dot" style={{ background: friend.avatarColor }} />
-                  {friend.username}
-                </button>
+                  aria-label={`Chat with ${friend.username}`}
+                >Chat</button>
               </li>
             ))}
           </ul>
+          {blockData.blocked.length > 0 && (
+            <div className="sidebar-card">
+              <strong>Blocked users</strong>
+              {blockData.blocked.map((blockedUser) => (
+                <div className="management-row" key={blockedUser.id}>
+                  <button className="friend-name" onClick={() => setProfileUserId(blockedUser.id)}>
+                    {blockedUser.username}
+                  </button>
+                  <button className="subtle-button" onClick={() => unblockUser(blockedUser.id)}>Unblock</button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="sidebar-section">
@@ -420,8 +518,12 @@ export default function Chat() {
             {online.map((person) => (
               <li key={person.id}>
                 <span className="dot" style={{ background: person.avatarColor }} />
-                {person.username}
-                {person.id === user.id && ' (you)'}
+                <button className="friend-name" onClick={() => setProfileUserId(person.id)}>
+                  {person.username}{person.id === user.id && ' (you)'}
+                </button>
+                {person.id !== user.id && !blockData.blocked.some((item) => item.id === person.id) && (
+                  <button className="subtle-button" onClick={() => blockUser(person.id)}>Block</button>
+                )}
               </li>
             ))}
           </ul>
@@ -430,6 +532,11 @@ export default function Chat() {
         {currentRoom?.kind === 'private' && currentRoom.isCreator && (
           <div className="sidebar-section">
             <h4>Room management</h4>
+            <div className="sidebar-card">
+              <strong>{currentRoom.name}</strong>
+              <span>{currentRoom.memberCount} members · invitation only</span>
+              <span>Created {new Date(currentRoom.createdAt).toLocaleDateString()}</span>
+            </div>
             <button className="wide-button" onClick={createInvite}>Create invitation link</button>
             {inviteUrl && (
               <div className="sidebar-card">
@@ -466,7 +573,7 @@ export default function Chat() {
                 </form>
                 {roomMembers.members.map((member) => (
                   <div className="management-row" key={member.id}>
-                    <span>{member.username}</span>
+                    <button className="friend-name" onClick={() => setProfileUserId(member.id)}>{member.username}</button>
                     {member.id !== user.id && <button onClick={() => banMember(member.id)}>Ban</button>}
                   </div>
                 ))}
@@ -480,6 +587,7 @@ export default function Chat() {
                 ))}
               </div>
             )}
+            <button className="wide-button danger-button" onClick={deleteRoom}>Delete room and messages</button>
           </div>
         )}
 
@@ -487,7 +595,9 @@ export default function Chat() {
           <div className="avatar" style={{ background: user.avatarColor }}>
             {user.username[0].toUpperCase()}
           </div>
-          <span>{user.username}</span>
+          <button className="me-profile" onClick={() => setProfileUserId(user.id)}>
+            {user.username}<small>Profile</small>
+          </button>
           <button className="link" onClick={logout}>Log out</button>
         </div>
       </aside>
@@ -511,7 +621,12 @@ export default function Chat() {
             </div>
           ) : (
             messages.map((message) => (
-              <MessageBubble key={message._id} message={message} isOwn={message.sender === user.id} />
+              <MessageBubble
+                key={message._id}
+                message={message}
+                isOwn={message.sender === user.id}
+                onOpenProfile={setProfileUserId}
+              />
             ))
           )}
           <div ref={bottomRef} />
@@ -526,6 +641,16 @@ export default function Chat() {
 
         <MessageInput onSend={sendMessage} onTyping={sendTyping} disabled={!connected} />
       </main>
+      {profileUserId && (
+        <ProfilePanel
+          userId={profileUserId}
+          token={token}
+          blockedByMe={blockData.blocked.some((item) => item.id === profileUserId)}
+          onClose={() => setProfileUserId(null)}
+          onBlock={blockUser}
+          onUnblock={unblockUser}
+        />
+      )}
     </div>
   );
 }

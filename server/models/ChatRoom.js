@@ -17,6 +17,7 @@ const roomSchema = new mongoose.Schema(
     members: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     inviteHash: { type: String, required: true, unique: true },
     bans: { type: [banSchema], default: [] },
+    deleting: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

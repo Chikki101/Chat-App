@@ -1,8 +1,10 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import Friendship from '../models/Friendship.js';
+import Block from '../models/Block.js';
 import User from '../models/User.js';
 import protect from '../middleware/auth.js';
+import { blockedUserIds, usersBlocked } from '../utils/blocks.js';
 
 const router = Router();
 const userSummary = (user) => ({
@@ -13,6 +15,18 @@ const userSummary = (user) => ({
 const notifyFriends = (io, userIds) => {
   if (!io) return;
   for (const userId of userIds) io.to(`user:${userId}`).emit('friends:changed');
+};
+const notifyBlockChange = async (io, userIds) => {
+  if (!io) return;
+  const uniqueIds = [...new Set(userIds.map(String))];
+  for (const userId of uniqueIds) io.to(`user:${userId}`).emit('blocks:changed', { userIds: uniqueIds });
+  if (io.broadcastPresence) {
+    try {
+      await io.broadcastPresence();
+    } catch (err) {
+      console.error('presence refresh after block change failed', err);
+    }
+  }
 };
 
 router.use(protect);
@@ -27,6 +41,9 @@ router.get('/search/:userId', async (req, res) => {
     }
     const user = await User.findById(req.params.userId).select('username avatarColor');
     if (!user) return res.status(404).json({ message: 'User not found' });
+    if (await usersBlocked(req.user._id, user._id)) {
+      return res.json({ user: userSummary(user), relationship: 'blocked' });
+    }
     const request = await Friendship.findOne({
       $or: [
         { from: req.user._id, to: user._id },
@@ -66,22 +83,102 @@ router.get('/', async (req, res) => {
       ...requests.flatMap((request) => [String(request.from), String(request.to)]),
       ...users.flatMap((request) => [String(request.from), String(request.to)]),
     ]);
-    const profiles = await User.find({ _id: { $in: [...relatedIds] } }).select('_id username avatarColor');
+    const hiddenIds = await blockedUserIds(req.user._id, [...relatedIds]);
+    const visibleRequests = requests.filter((request) => {
+      const otherId = String(request.from) === String(req.user._id) ? String(request.to) : String(request.from);
+      return !hiddenIds.has(otherId);
+    });
+    const visibleFriends = users.filter((friendship) => {
+      const otherId = String(friendship.from) === String(req.user._id)
+        ? String(friendship.to)
+        : String(friendship.from);
+      return !hiddenIds.has(otherId);
+    });
+    const visibleIds = new Set([
+      ...visibleRequests.flatMap((request) => [String(request.from), String(request.to)]),
+      ...visibleFriends.flatMap((friendship) => [String(friendship.from), String(friendship.to)]),
+    ]);
+    const profiles = await User.find({ _id: { $in: [...visibleIds] } }).select('_id username avatarColor');
     const userMap = new Map(profiles.map((user) => [String(user._id), userSummary(user)]));
     res.json({
-      friends: users.map((request) =>
+      friends: visibleFriends.map((request) =>
         userMap.get(String(request.from) === String(req.user._id) ? String(request.to) : String(request.from))
       ).filter(Boolean),
-      incoming: requests
+      incoming: visibleRequests
         .filter((request) => String(request.to) === String(req.user._id))
         .map((request) => ({ ...userMap.get(String(request.from)), requestId: String(request._id) })),
-      outgoing: requests
+      outgoing: visibleRequests
         .filter((request) => String(request.from) === String(req.user._id))
         .map((request) => ({ ...userMap.get(String(request.to)), requestId: String(request._id) })),
     });
   } catch (err) {
     console.error('friends:list failed', err);
     res.status(500).json({ message: 'Could not load friends' });
+  }
+});
+
+router.get('/blocked', async (req, res) => {
+  try {
+    const [blockedRows, hiddenIds] = await Promise.all([
+      Block.find({ blocker: req.user._id }).populate('blocked', 'username avatarColor'),
+      blockedUserIds(req.user._id),
+    ]);
+    res.json({
+      blocked: blockedRows
+        .filter((row) => row.blocked)
+        .map((row) => userSummary(row.blocked)),
+      hiddenIds: [...hiddenIds],
+    });
+  } catch (err) {
+    console.error('friends:blocked list failed', err);
+    res.status(500).json({ message: 'Could not load blocked users' });
+  }
+});
+
+router.post('/:userId/block', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.userId) || String(req.user._id) === req.params.userId) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+    const other = await User.findById(req.params.userId).select('_id');
+    if (!other) return res.status(404).json({ message: 'User not found' });
+
+    await Promise.all([
+      Block.findOneAndUpdate(
+        { blocker: req.user._id, blocked: other._id },
+        { $setOnInsert: { blocker: req.user._id, blocked: other._id } },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+      ),
+      Friendship.deleteMany({
+        $or: [
+          { from: req.user._id, to: other._id },
+          { from: other._id, to: req.user._id },
+        ],
+      }),
+    ]);
+    const ids = [req.user._id, other._id].map(String);
+    notifyFriends(req.app.locals.io, ids);
+    await notifyBlockChange(req.app.locals.io, ids);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.code === 11000) return res.json({ ok: true });
+    console.error('friends:block failed', err);
+    res.status(500).json({ message: 'Could not block user' });
+  }
+});
+
+router.delete('/:userId/block', async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.userId) || String(req.user._id) === req.params.userId) {
+      return res.status(400).json({ message: 'Invalid user id' });
+    }
+    await Block.deleteOne({ blocker: req.user._id, blocked: req.params.userId });
+    const ids = [req.user._id, req.params.userId].map(String);
+    await notifyBlockChange(req.app.locals.io, ids);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('friends:unblock failed', err);
+    res.status(500).json({ message: 'Could not unblock user' });
   }
 });
 
@@ -92,6 +189,9 @@ router.post('/:userId/request', async (req, res) => {
     }
     const other = await User.findById(req.params.userId).select('username avatarColor');
     if (!other) return res.status(404).json({ message: 'User not found' });
+    if (await usersBlocked(req.user._id, other._id)) {
+      return res.status(403).json({ message: 'Friend requests are unavailable while either user is blocked' });
+    }
 
     const existing = await Friendship.findOne({
       $or: [
@@ -131,6 +231,9 @@ router.post('/:userId/respond', async (req, res) => {
       status: 'pending',
     });
     if (!request) return res.status(404).json({ message: 'Friend request not found' });
+    if (await usersBlocked(req.user._id, request.from)) {
+      return res.status(403).json({ message: 'Friend requests are unavailable while either user is blocked' });
+    }
     if (req.body.accept) {
       request.status = 'accepted';
       await request.save();

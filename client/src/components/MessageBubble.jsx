@@ -1,6 +1,6 @@
 import SentimentBadge from './SentimentBadge.jsx';
 
-export default function MessageBubble({ message, isOwn }) {
+export default function MessageBubble({ message, isOwn, onOpenProfile }) {
   const time = new Date(message.createdAt).toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
@@ -16,7 +16,11 @@ export default function MessageBubble({ message, isOwn }) {
       )}
       <div className="bubble">
         <div className="meta">
-          {!isOwn && <strong>{message.senderName}</strong>}
+          {!isOwn && (
+            <button className="message-profile-link" onClick={() => onOpenProfile(message.sender)}>
+              {message.senderName}
+            </button>
+          )}
           <span>{time}</span>
         </div>
         <p>{message.text}</p>

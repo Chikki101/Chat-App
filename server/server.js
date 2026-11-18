@@ -10,6 +10,7 @@ import authRoutes from './routes/auth.js';
 import messageRoutes from './routes/messages.js';
 import roomRoutes from './routes/rooms.js';
 import friendRoutes from './routes/friends.js';
+import userRoutes from './routes/users.js';
 import protect from './middleware/auth.js';
 import { analyze } from './utils/sentiment.js';
 import { initSocket } from './socket.js';
@@ -34,6 +35,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/rooms', roomRoutes);
 app.use('/api/friends', friendRoutes);
+app.use('/api/users', userRoutes);
 
 // Live "tone preview" used by the message box while the user types
 app.post('/api/analyze', protect, async (req, res) => {

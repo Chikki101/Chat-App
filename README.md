@@ -10,7 +10,10 @@ Every message is classified for sentiment before it is saved and broadcast. The 
 - **Live tone preview** while you type
 - **Room mood meter** summarising the sentiment of the room
 - **Private invite-only rooms** with creator bans, unbans, and automatic moderation
+- Creator room management with persistent room details, fresh invitation-link generation, and permanent room/message deletion
 - **Mutual friend requests** and real-time one-to-one messaging
+- User profiles with optional email, phone, and bio visible only to the profile owner and accepted friends
+- Blocking that removes friendships and filters blocked users from shared-room messages, typing, presence, and member lists
 - Online-user counts in the general and random rooms
 - Responsive dark UI, custom SVG assets
 
@@ -34,9 +37,11 @@ unban accounts, and rotate invitation links. If the creator reaches the automati
 creator remains able to manage the room and unban themselves. Sentiment classification is a moderation aid, not a reliable
 assessment of a person's mental state; sarcasm and context can still be misclassified.
 
-Private-room invitation links grant access to anyone who has the link until the creator rotates it.
+Private-room invitation links grant access to anyone who has the link until the creator rotates it. Creators can revisit room details and generate a new invitation link at any time; generating a new link invalidates the previous one. Deleting a room permanently deletes its messages and disconnects its active members.
 Direct messages are available only after both users accept the friendship (an incoming request can
-be accepted directly or by sending a request back).
+be accepted directly or by sending a request back). Blocking removes the friendship and prevents
+friend requests and direct messages until unblocked; unblocking does not automatically restore the
+friendship. Profile email, phone, and bio are returned only to the profile owner or an accepted friend.
 
 ## Project structure
 ```
@@ -52,8 +57,8 @@ mern-sentiment-chat/
 │   ├── constants.js          # room list
 │   ├── config/db.js
 │   ├── middleware/auth.js    # JWT guard
-│   ├── models/{User,Message,ChatRoom,Friendship}.js
-│   ├── routes/{auth,messages,rooms,friends}.js
+│   ├── models/{User,Message,ChatRoom,Friendship,Block}.js
+│   ├── routes/{auth,messages,rooms,friends,users}.js
 │   └── utils/                 # sentiment analysis and conversation access
 └── client/
     ├── .env.example

@@ -26,6 +26,8 @@ export const api = {
   analyze: (text, token) => request('/api/analyze', { method: 'POST', body: { text }, token }),
   rooms: (token) => request('/api/rooms', { token }),
   createRoom: (name, token) => request('/api/rooms', { method: 'POST', body: { name }, token }),
+  deleteRoom: (roomId, token) =>
+    request(`/api/rooms/${roomId.replace('private:', '')}`, { method: 'DELETE', token }),
   joinRoom: (inviteToken, token) =>
     request('/api/rooms/join', { method: 'POST', body: { token: inviteToken }, token }),
   createInvite: (roomId, token) =>
@@ -36,8 +38,14 @@ export const api = {
   unbanMember: (roomId, userId, token) =>
     request(`/api/rooms/${roomId.replace('private:', '')}/ban/${userId}`, { method: 'DELETE', token }),
   friends: (token) => request('/api/friends', { token }),
+  blockedUsers: (token) => request('/api/friends/blocked', { token }),
+  blockUser: (userId, token) => request(`/api/friends/${userId}/block`, { method: 'POST', token }),
+  unblockUser: (userId, token) => request(`/api/friends/${userId}/block`, { method: 'DELETE', token }),
   searchUser: (userId, token) => request(`/api/friends/search/${userId}`, { token }),
   requestFriend: (userId, token) => request(`/api/friends/${userId}/request`, { method: 'POST', token }),
   respondFriend: (userId, accept, token) =>
     request(`/api/friends/${userId}/respond`, { method: 'POST', body: { accept }, token }),
+  profile: (userId, token) => request(`/api/users/${userId}/profile`, { token }),
+  updateProfile: (profile, token) =>
+    request('/api/users/me/profile', { method: 'PATCH', body: profile, token }),
 };

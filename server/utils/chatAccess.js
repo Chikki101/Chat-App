@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import ChatRoom from '../models/ChatRoom.js';
 import Friendship from '../models/Friendship.js';
 import { ROOMS } from '../constants.js';
+import { usersBlocked } from './blocks.js';
 
 export const privateRoomKey = (id) => `private:${id}`;
 
@@ -19,9 +20,10 @@ export async function canAccessConversation(userId, roomKey) {
 
   const roomId = privateRoomId(roomKey);
   if (roomId) {
-    const room = await ChatRoom.findById(roomId).select('members bans');
+    const room = await ChatRoom.findById(roomId).select('members bans deleting');
     return Boolean(
       room &&
+        !room.deleting &&
         room.members.some((member) => String(member) === String(userId)) &&
         !room.bans.some((ban) => String(ban.user) === String(userId))
     );
@@ -33,13 +35,15 @@ export async function canAccessConversation(userId, roomKey) {
   }
 
   const [first, second] = directMatch.slice(1);
-  return Boolean(
-    await Friendship.exists({
+  const [friendship, isBlocked] = await Promise.all([
+    Friendship.exists({
       status: 'accepted',
       $or: [
         { from: first, to: second },
         { from: second, to: first },
       ],
-    })
-  );
+    }),
+    usersBlocked(first, second),
+  ]);
+  return Boolean(friendship) && !isBlocked;
 }

@@ -13,6 +13,9 @@ const userSchema = new mongoose.Schema(
     },
     passwordHash: { type: String, required: true },
     avatarColor: { type: String, default: '#6366f1' },
+    email: { type: String, trim: true, lowercase: true, maxlength: 254, default: '' },
+    phone: { type: String, trim: true, maxlength: 32, default: '' },
+    bio: { type: String, trim: true, maxlength: 500, default: '' },
   },
   { timestamps: true }
 );
